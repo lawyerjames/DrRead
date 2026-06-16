@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DrRead 論文朗讀筆記</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="reader-pane" aria-label="PDF 閱讀與朗讀控制">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">DrRead</p>
+            <h1>論文朗讀筆記</h1>
+          </div>
+          <div class="status" id="statusText" role="status">等待上傳 PDF</div>
+        </header>
+
+        <section class="control-surface" aria-label="文件與朗讀控制">
+          <label class="upload-zone" id="dropZone" for="pdfInput">
+            <input id="pdfInput" type="file" accept="application/pdf,.pdf" />
+            <span class="upload-icon" aria-hidden="true">+</span>
+            <span class="upload-title">拖放 PDF 或點擊上傳</span>
+            <span class="upload-meta" id="fileMeta">所有解析都在本機瀏覽器完成</span>
+          </label>
+
+          <div class="tts-panel">
+            <div class="button-row" aria-label="朗讀控制">
+              <button class="icon-button" id="playButton" type="button" title="播放" aria-label="播放">
+                <span aria-hidden="true">▶</span>
+              </button>
+              <button class="icon-button" id="pauseButton" type="button" title="暫停" aria-label="暫停">
+                <span aria-hidden="true">⏸</span>
+              </button>
+              <button class="icon-button" id="stopButton" type="button" title="停止" aria-label="停止">
+                <span aria-hidden="true">■</span>
+              </button>
+            </div>
+
+            <label class="field">
+              <span>語音</span>
+              <select id="voiceSelect"></select>
+            </label>
+
+            <label class="field range-field">
+              <span>語速 <output id="rateOutput">1.0</output></span>
+              <input id="rateInput" type="range" min="0.5" max="2" step="0.1" value="1" />
+            </label>
+
+            <label class="field range-field">
+              <span>音調 <output id="pitchOutput">1.0</output></span>
+              <input id="pitchInput" type="range" min="0.5" max="2" step="0.1" value="1" />
+            </label>
+          </div>
+        </section>
+
+        <section class="reading-area" id="readingArea" aria-label="PDF 文字閱讀區">
+          <div class="empty-state">
+            <h2>上傳 PDF 後開始閱讀</h2>
+            <p>文字會依頁碼與段落整理在這裡，朗讀時會同步標示目前段落。</p>
+          </div>
+        </section>
+      </section>
+
+      <aside class="notes-pane" aria-label="即時筆記">
+        <div class="notes-header">
+          <div>
+            <p class="eyebrow">Notes</p>
+            <h2>閱讀筆記</h2>
+          </div>
+          <button class="small-button" id="clearNotesButton" type="button">清空</button>
+        </div>
+        <textarea
+          id="notesInput"
+          spellcheck="true"
+          placeholder="在閱讀時記下摘要、疑問、引用頁碼或自己的想法..."
+        ></textarea>
+        <p class="save-state" id="saveState">筆記會自動暫存</p>
+      </aside>
+    </main>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
