@@ -7,6 +7,8 @@ text-to-speech and persistent notes.
 
 - Drag-and-drop or click-to-upload PDF files.
 - Client-side PDF text extraction with Mozilla PDF.js via CDN.
+- Main-text reading mode that skips common source notices, running headers,
+  footers, download notices, and small bottom notes.
 - Browser TTS playback with play, pause, stop, voice, rate, and pitch controls.
 - Paragraph highlighting while reading aloud.
 - Notes saved automatically in `localStorage`.

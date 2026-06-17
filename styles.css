@@ -176,7 +176,7 @@ h2 {
 
 .tts-panel {
   display: grid;
-  grid-template-columns: auto minmax(180px, 1fr) minmax(160px, 0.8fr) minmax(160px, 0.8fr);
+  grid-template-columns: auto minmax(180px, 1fr) minmax(150px, 0.75fr) minmax(150px, 0.75fr) auto;
   gap: 12px;
   align-items: end;
 }
@@ -239,6 +239,22 @@ h2 {
 .range-field output {
   color: var(--ink);
   font-variant-numeric: tabular-nums;
+}
+
+.checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  color: var(--ink);
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+
+.checkbox-field input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
 }
 
 .reading-area {
@@ -313,6 +329,11 @@ h2 {
 .paragraph.is-selected {
   background: #fff7d6;
   box-shadow: inset 4px 0 0 var(--warning);
+}
+
+.paragraph.is-empty {
+  color: var(--muted);
+  font-style: italic;
 }
 
 .notes-header {

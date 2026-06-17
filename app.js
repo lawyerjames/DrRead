@@ -11,6 +11,7 @@ const elements = {
   fileMeta: document.querySelector("#fileMeta"),
   statusText: document.querySelector("#statusText"),
   readingArea: document.querySelector("#readingArea"),
+  mainTextOnlyInput: document.querySelector("#mainTextOnlyInput"),
   playButton: document.querySelector("#playButton"),
   pauseButton: document.querySelector("#pauseButton"),
   stopButton: document.querySelector("#stopButton"),
@@ -30,6 +31,7 @@ let currentParagraphIndex = 0;
 let activeUtterance = null;
 let isPaused = false;
 let voices = [];
+let currentFile = null;
 
 function setStatus(message) {
   elements.statusText.textContent = message;
@@ -44,57 +46,208 @@ function setLoadingState(isLoading) {
   elements.dropZone.classList.toggle("is-loading", isLoading);
 }
 
-function normalizeText(items) {
+function median(numbers) {
+  const sorted = numbers.filter(Number.isFinite).sort((first, second) => first - second);
+  const midpoint = Math.floor(sorted.length / 2);
+
+  if (sorted.length === 0) {
+    return 0;
+  }
+
+  return sorted.length % 2 === 0
+    ? (sorted[midpoint - 1] + sorted[midpoint]) / 2
+    : sorted[midpoint];
+}
+
+function textMatchesAny(text, patterns) {
+  return patterns.some((pattern) => pattern.test(text));
+}
+
+function getItemGeometry(item, pageHeight) {
+  const fontSize = Math.abs(item.transform[3]) || item.height || 0;
+
+  return {
+    text: item.str.replace(/\s+/g, " ").trim(),
+    x: item.transform[4],
+    y: item.transform[5],
+    top: pageHeight - item.transform[5],
+    fontSize,
+  };
+}
+
+function isJstorSourceNotice(items, pageNumber) {
+  if (pageNumber !== 1) {
+    return false;
+  }
+
+  const pageText = items.map((item) => item.text).join(" ");
+  return (
+    pageText.includes("JSTOR is a not-for-profit") &&
+    pageText.includes("Stable URL") &&
+    pageText.includes("The Yale Law Journal")
+  );
+}
+
+function shouldKeepTextItem(item, context) {
+  if (!context.mainTextOnly) {
+    return true;
+  }
+
+  const { pageHeight, bodyFontSize, pageNumber } = context;
+  const boilerplatePatterns = [
+    /^This content downloaded from$/i,
+    /^All use subject to$/i,
+    /^https:\/\/about\.jstor\.org\/terms$/i,
+    /^\(cid:\d+\)/i,
+    /^JSTOR\b/i,
+  ];
+
+  if (textMatchesAny(item.text, boilerplatePatterns)) {
+    return false;
+  }
+
+  const isExtremeFooter = item.top > pageHeight - 34;
+  const isRunningHeader = pageNumber > 1 && item.top < pageHeight * 0.15;
+  const isSmallBottomNote =
+    bodyFontSize > 0 && item.fontSize < bodyFontSize * 0.82 && item.top > pageHeight * 0.62;
+
+  return !isExtremeFooter && !isRunningHeader && !isSmallBottomNote;
+}
+
+function toLines(items) {
   const lines = [];
-  let line = "";
-  let lastY = null;
+  let currentLine = null;
 
   items.forEach((item) => {
-    const text = item.str.trim();
+    const isNewLine =
+      currentLine && Math.abs(item.top - currentLine.top) > Math.max(4, item.fontSize * 0.55);
 
-    if (!text) {
+    if (isNewLine) {
+      lines.push(currentLine);
+      currentLine = null;
+    }
+
+    if (!currentLine) {
+      currentLine = {
+        text: item.text,
+        top: item.top,
+        x: item.x,
+        fontSize: item.fontSize,
+      };
       return;
     }
 
-    const y = Math.round(item.transform[5]);
-    const isNewLine = lastY !== null && Math.abs(y - lastY) > 4;
-
-    if (isNewLine && line.trim()) {
-      lines.push(line.trim());
-      line = "";
-    }
-
-    line = line ? `${line} ${text}` : text;
-    lastY = y;
+    currentLine.text = `${currentLine.text} ${item.text}`;
+    currentLine.fontSize = Math.max(currentLine.fontSize, item.fontSize);
   });
 
-  if (line.trim()) {
-    lines.push(line.trim());
+  if (currentLine) {
+    lines.push(currentLine);
   }
 
-  return lines
-    .join("\n")
-    .split(/\n{2,}|(?<=\.)\s+(?=[A-Z])|(?<=。)\s*/)
-    .map((paragraph) => paragraph.replace(/\s+/g, " ").trim())
-    .filter(Boolean);
+  return lines.map((line) => ({
+    ...line,
+    text: line.text.replace(/\s+/g, " ").trim(),
+  }));
+}
+
+function lineStartsParagraph(line, previousLine) {
+  if (!previousLine) {
+    return true;
+  }
+
+  const verticalGap = line.top - previousLine.top;
+  const expectedGap = Math.max(line.fontSize, previousLine.fontSize) * 1.55;
+  const isIndented = line.x - previousLine.x > 14;
+  const previousEndsSentence = /[.!?]"?$/.test(previousLine.text);
+
+  return verticalGap > expectedGap || (isIndented && previousEndsSentence);
+}
+
+function mergeLinesToParagraphs(lines) {
+  const paragraphs = [];
+  let currentParagraph = "";
+  let previousLine = null;
+
+  lines.forEach((line) => {
+    if (lineStartsParagraph(line, previousLine)) {
+      if (currentParagraph.trim()) {
+        paragraphs.push(currentParagraph.trim());
+      }
+      currentParagraph = line.text;
+    } else if (currentParagraph.endsWith("-")) {
+      currentParagraph = `${currentParagraph.slice(0, -1)}${line.text}`;
+    } else {
+      currentParagraph = `${currentParagraph} ${line.text}`;
+    }
+
+    previousLine = line;
+  });
+
+  if (currentParagraph.trim()) {
+    paragraphs.push(currentParagraph.trim());
+  }
+
+  return paragraphs.filter((paragraph) => paragraph.length > 1);
+}
+
+function normalizeText(items, options) {
+  const pageItems = items.map((item) => getItemGeometry(item, options.pageHeight)).filter((item) => item.text);
+
+  if (options.mainTextOnly && isJstorSourceNotice(pageItems, options.pageNumber)) {
+    return {
+      paragraphs: [],
+      skippedReason: "JSTOR source notice",
+    };
+  }
+
+  const candidateFontSizes = pageItems
+    .filter((item) => item.top > options.pageHeight * 0.12 && item.top < options.pageHeight * 0.82)
+    .map((item) => item.fontSize);
+  const bodyFontSize = median(candidateFontSizes);
+  const filteredItems = pageItems.filter((item) =>
+    shouldKeepTextItem(item, {
+      ...options,
+      bodyFontSize,
+    }),
+  );
+
+  return {
+    paragraphs: mergeLinesToParagraphs(toLines(filteredItems)),
+    skippedReason: null,
+  };
 }
 
 async function extractPdf(file) {
   const buffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
   const pages = [];
+  let skippedPages = 0;
+  const mainTextOnly = elements.mainTextOnlyInput.checked;
 
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
-    setStatus(`解析第 ${pageNumber} / ${pdf.numPages} 頁`);
+    setStatus(`正在整理第 ${pageNumber} / ${pdf.numPages} 頁`);
     const page = await pdf.getPage(pageNumber);
+    const viewport = page.getViewport({ scale: 1 });
     const textContent = await page.getTextContent();
+    const result = normalizeText(textContent.items, {
+      pageNumber,
+      pageHeight: viewport.height,
+      mainTextOnly,
+    });
+
+    if (result.skippedReason) {
+      skippedPages += 1;
+      continue;
+    }
+
     pages.push({
       pageNumber,
-      paragraphs: normalizeText(textContent.items),
+      paragraphs: result.paragraphs,
     });
   }
 
-  return pages;
+  return { pages, skippedPages };
 }
 
 function renderPages(pages) {
@@ -112,8 +265,8 @@ function renderPages(pages) {
 
     if (page.paragraphs.length === 0) {
       const paragraph = document.createElement("p");
-      paragraph.className = "paragraph";
-      paragraph.textContent = "此頁未擷取到可朗讀文字。";
+      paragraph.className = "paragraph is-empty";
+      paragraph.textContent = "這一頁沒有可朗讀的正文。";
       section.append(paragraph);
     } else {
       page.paragraphs.forEach((text) => {
@@ -130,30 +283,39 @@ function renderPages(pages) {
     fragment.append(section);
   });
 
+  if (pages.length === 0) {
+    const emptyState = document.createElement("div");
+    emptyState.className = "empty-state";
+    emptyState.innerHTML = "<h2>沒有找到正文</h2><p>可關閉「只讀正文」後重新載入，檢查原始抽取結果。</p>";
+    fragment.append(emptyState);
+  }
+
   elements.readingArea.replaceChildren(fragment);
   paragraphNodes = [...elements.readingArea.querySelectorAll(".paragraph")].filter(
-    (node) => !node.textContent.includes("未擷取到可朗讀文字"),
+    (node) => !node.classList.contains("is-empty"),
   );
   currentParagraphIndex = 0;
 }
 
 async function handlePdfFile(file) {
   if (!file || file.type !== "application/pdf") {
-    setStatus("請選擇 PDF 檔案");
+    setStatus("請選擇 PDF 檔案。");
     return;
   }
 
+  currentFile = file;
   stopSpeech();
   setLoadingState(true);
-  setFileMeta(`${file.name} · ${(file.size / 1024 / 1024).toFixed(2)} MB`);
+  setFileMeta(`${file.name}，${(file.size / 1024 / 1024).toFixed(2)} MB`);
 
   try {
-    const pages = await extractPdf(file);
+    const { pages, skippedPages } = await extractPdf(file);
     renderPages(pages);
-    setStatus(`已載入 ${file.name}`);
+    const skippedText = skippedPages > 0 ? `，已略過 ${skippedPages} 頁非正文` : "";
+    setStatus(`已載入 ${file.name}${skippedText}`);
   } catch (error) {
     console.error(error);
-    setStatus("PDF 解析失敗，請換一份文件試試");
+    setStatus("PDF 讀取失敗，請確認檔案沒有加密或損毀。");
   } finally {
     setLoadingState(false);
   }
@@ -212,10 +374,10 @@ function speakSelectedText(text) {
   activeUtterance = createUtterance(text);
   activeUtterance.onend = () => {
     activeUtterance = null;
-    setStatus("選取文字朗讀完成");
+    setStatus("已讀完選取文字。");
   };
   speech.speak(activeUtterance);
-  setStatus("朗讀選取文字");
+  setStatus("正在朗讀選取文字。");
 }
 
 function speakCurrentQueue() {
@@ -223,7 +385,7 @@ function speakCurrentQueue() {
     activeUtterance = null;
     clearSpeakingHighlight();
     currentParagraphIndex = 0;
-    setStatus("朗讀完成");
+    setStatus("朗讀完成。");
     return;
   }
 
@@ -237,7 +399,7 @@ function speakCurrentQueue() {
   activeUtterance.onerror = () => {
     activeUtterance = null;
     clearSpeakingHighlight();
-    setStatus("朗讀中斷");
+    setStatus("朗讀中斷。");
   };
 
   speech.speak(activeUtterance);
@@ -252,14 +414,14 @@ function speakFromParagraph(paragraph) {
 
 function playSpeech() {
   if (!speech) {
-    setStatus("此瀏覽器不支援 Web Speech API");
+    setStatus("這個瀏覽器不支援 Web Speech API。");
     return;
   }
 
   if (isPaused) {
     speech.resume();
     isPaused = false;
-    setStatus("繼續朗讀");
+    setStatus("繼續朗讀。");
     return;
   }
 
@@ -271,7 +433,7 @@ function playSpeech() {
   }
 
   if (paragraphNodes.length === 0) {
-    setStatus("請先上傳 PDF");
+    setStatus("請先載入 PDF。");
     return;
   }
 
@@ -283,7 +445,7 @@ function pauseSpeech() {
   if (speech && speech.speaking && !speech.paused) {
     speech.pause();
     isPaused = true;
-    setStatus("已暫停");
+    setStatus("已暫停。");
   }
 }
 
@@ -307,7 +469,7 @@ function prioritizeVoices(availableVoices) {
 
 function loadVoices() {
   if (!speech) {
-    elements.voiceSelect.replaceChildren(new Option("不支援語音合成", ""));
+    elements.voiceSelect.replaceChildren(new Option("沒有可用的語音", ""));
     elements.voiceSelect.disabled = true;
     return;
   }
@@ -316,7 +478,7 @@ function loadVoices() {
   elements.voiceSelect.replaceChildren();
 
   if (voices.length === 0) {
-    const option = new Option("瀏覽器預設語音", "");
+    const option = new Option("正在載入語音", "");
     elements.voiceSelect.add(option);
     return;
   }
@@ -336,7 +498,7 @@ function restoreNotes() {
 
 function saveNotes() {
   localStorage.setItem(storageKey, elements.notesInput.value);
-  elements.saveState.textContent = `已暫存 ${new Date().toLocaleTimeString("zh-TW", {
+  elements.saveState.textContent = `已儲存於 ${new Date().toLocaleTimeString("zh-TW", {
     hour: "2-digit",
     minute: "2-digit",
   })}`;
@@ -344,6 +506,12 @@ function saveNotes() {
 
 elements.pdfInput.addEventListener("change", (event) => {
   handlePdfFile(event.target.files[0]);
+});
+
+elements.mainTextOnlyInput.addEventListener("change", () => {
+  if (currentFile) {
+    handlePdfFile(currentFile);
+  }
 });
 
 ["dragenter", "dragover"].forEach((eventName) => {
@@ -368,7 +536,7 @@ elements.playButton.addEventListener("click", playSpeech);
 elements.pauseButton.addEventListener("click", pauseSpeech);
 elements.stopButton.addEventListener("click", () => {
   stopSpeech();
-  setStatus("已停止朗讀");
+  setStatus("已停止朗讀。");
 });
 
 elements.rateInput.addEventListener("input", () => {
